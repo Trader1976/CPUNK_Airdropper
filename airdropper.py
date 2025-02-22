@@ -16,13 +16,15 @@ import socket
 #      +           >._-' _./         +
 #               /| ;-"~ _  l
 #  .           / l/ ,-"~    \     +        C P U N K   A I R D R O P P E R
-#              \//\/      .- \                        V1.0
+#              \//\/      .- \                        V1.2
 #       +       Y        /    Y          This program requires Cellframe node
 #               l       I     !          which is online and 100% synced to the
-#               ]\      _\    /"\        chain. It will take a snapshot and distribut
+#               ]\      _\    /"\        chain. It will take a snapshot and distribute
 #              (" ~----( ~   Y.  )       some CPUNK tokens to every wallet in CF20 ledger.
 #          ~~~~~~~~~~~~~~~~~~~~~~~~~~    USE AT YOUR OWN RISK. I'm a punk... a C punk.
 # Other requirements : sqlite3 and balls of steel to actually run the airdrop from your wallet.
+# Added feature : mempool checking. After every transaction, we will look into mempool and wait
+# until our transaction has left. Only after that we make another transaction.
 def investigate_ledger():
     """Shows some data from CF20 CELL ledger
     """
@@ -54,7 +56,8 @@ def investigate_ledger():
         #######################################################
         airdrop_amount = 10000000
         tx_fee = 0.01
-        pause_between_transactions = 1 #seconds
+        pause_between_transactions = 90 #seconds (We wait 30 seconds after every tx and then check mempool
+                                        #         ...usually ita takes 2-3 times to complete)
 
 
         airdrop_costs = tx_fee * wallets
@@ -73,9 +76,9 @@ def investigate_ledger():
 
         print("To make the actual airdrop happen, we need to make some transactions.")
         print("In order not to flood / clog the mempool, we should have a small pause between")
-        print("every transaction. If we pause for",pause_between_transactions*1000, "milliseconds")
-        required_time = (pause_between_transactions * wallets) / 60
-        print("then the whole airdrop would take", required_time, "minutes of full action.")
+        print("every transaction. If we pause for",pause_between_transactions, "seconds")
+        required_time = (pause_between_transactions * wallets) / 3600
+        print("then the whole airdrop would take", required_time, "hours of full action.")
 
 
 def check_online_status():  # stops the program if cellframe-node-cli is OFFLINE
@@ -87,7 +90,6 @@ def check_online_status():  # stops the program if cellframe-node-cli is OFFLINE
     states = ["NET_STATE_ONLINE", "NET_STATE_SYNC_CHAINS", "NET_STATE_SYNC_GDB"]
     print("checking")
     data = json_output("net", "net;-net;Backbone;get;status")
-    # print("data we got", data)
     if (data["result"][0]["status"]["states"]["current"]) in states:
         print("Node ONLINE")
 
@@ -372,6 +374,38 @@ def send(from_wallet:str, amount: float, to_wallet:str):
         exit(1)
 
 
+def check_mempool(transaction_hash:str):
+    """JSON Dumps the mempool and tries to locate our last transaction.
+        Parameters :
+            tx_hash : last airdrop transaction hash
+            returns : 0 if transaction no longer in the mempool
+                      1 if the trasaction still in the mempool
+    """
+    payload_tx = "mempool;list;-net;Backbone;-chain;main"
+    mempool_data = json_output("mempool", payload_tx)
+
+    total_str = mempool_data['result'][0]['chains'][0]['total']
+    match = re.search(r'\d+$', total_str)
+
+    if match: #get number of transactions in mempool
+        transactions_in_mempool = int(match.group())  # Convert to integer
+
+    for x in range(transactions_in_mempool): #search our transaction from mempool transaction hashes
+        hash = mempool_data['result'][0]['chains'][0]['datums'][x]['hash']
+
+        #if we found our transaction from the mempool
+        if hash == transaction_hash:
+            print("Our transaction is still in the mempool...let's wait 30 seconds")
+            print("--------------------------------------------------------------------")
+            print("Waiting.", end="")
+            for z in range(60):
+                print(".", end="")
+                time.sleep(0.5)
+            return 1
+        else:
+            pass
+    return 0
+
 
 def airdrop():
     """Does the actual airdrop. It looks through our database wallet by wallet
@@ -386,7 +420,7 @@ def airdrop():
     #########################################################################
 
     from_wallet = "ThisIsMyWallet_01"    #define here the name of the sending wallet
-    amount = 0.05                  #amount of CPUNK we are going to airdrop
+    amount = 0.05                        #amount of CPUNK we are going to airdrop
 
     db_path = 'airdrop.db'
     con = sqlite3.connect(db_path)
@@ -397,10 +431,11 @@ def airdrop():
         cur.execute(query)
         lines, = cur.fetchone()
         print("Going to do an airdrop into",lines,"wallets")
+        time_left = (lines * 90) / 3600
+        print("It's going to take approximately",time_left,"hours")
 
-        # go through each of them
+        # ...and go through each of them
         for x in range(1, lines+1):
-
             query = "SELECT wallet, tx_hash FROM snapshot WHERE id=?"
             cur.execute(query,[x])
             to_wallet, transaction_hash = cur.fetchone()
@@ -409,23 +444,24 @@ def airdrop():
             # If for some reason, our airdrop campaign comes to halt, we can
             # continue later as we don't send airdrop to those wallets that
             # already has it's transaction hash.
-
             if transaction_hash == "":
-                print("Sending airdrop to wallet",x,"/",lines,"...",to_wallet)
+                print("Sending airdrop",x,"/",lines, "to wallet", to_wallet)
+                hours = ((lines - x) * 90) / 3600
+                print("Aproximately", hours,"hours to go")
 
                 # SEND IT and receive transaction hash
                 hash = send(from_wallet, amount, to_wallet)
+                while check_mempool(hash) == 1: #wait until our transaction has left the mempool
+                    pass
+                print("Transaction", hash,"completed!")
+
+                #update tx_hash into database
                 query = "UPDATE snapshot SET tx_hash=? WHERE id=?"
                 cur.execute(query,[hash,x])
                 con.commit()
 
-                print("Transaction sent with receiving transaction hash",hash)
-                print("Sleep...30 seconds")
-                time.sleep(30)
-
             else:
                 print(x,"This wallet has already received the airdrop")
-
 
 
 if __name__ == "__main__":
@@ -434,7 +470,7 @@ if __name__ == "__main__":
     empty_database()        #Empty the database !!! WARNING...DO NOT USE after the airdrop!!!
     take_snapshot()         #Take a snapshot of entire CF20 ledger
     investigate_ledger()    #Throw out some calculation and other data from the ledger.
-    #airdrop()                #Does the actual airdrop. Remember to configure correctly!!!
+ #   airdrop()                #Does the actual airdrop. Remember to configure correctly!!!
 
     # After airdrop is done, run this below function. It checks every transaction
     # in our database and deletes tx_hash from the ones that were DECLINED.
