@@ -199,9 +199,13 @@ def empty_database():
     cur = con.cursor()
     with con:
         query = "DROP TABLE snapshot"  #destroy the old table...
-        cur.execute(query)
-        con.commit()
-        create_snapshot_database()     #...and make new one
+        try:
+            cur.execute(query)
+            con.commit()
+            create_snapshot_database()     #...and make new one
+        except:
+            print("Cannot find database. Let's make one.")
+            create_snapshot_database()
         return
 
 
@@ -439,6 +443,11 @@ def airdrop():
             query = "SELECT wallet, tx_hash FROM snapshot WHERE id=?"
             cur.execute(query,[x])
             to_wallet, transaction_hash = cur.fetchone()
+
+            # for testing purposes, uncomment the next 3 lines and CHANGE your second wallet down below.
+            #to_wallet = "Rj7J7MiX2bWy8sNyYZeSLFi8934jQb6jwKcYubvV3LBBiut5PmP3nqgRiXcR22X9XWA4ywocMxZETnHcMvBizb9eRYt1ztv8jsLpKUXc"
+            #transaction_hash = ""
+            #amount = 0.05
 
             # transaction_hash should be empty by default...but
             # If for some reason, our airdrop campaign comes to halt, we can
